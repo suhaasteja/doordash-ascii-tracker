@@ -4,8 +4,11 @@ Watch your DoorDash order live in the terminal — driver location, ETA, and sta
 
 ## Demo
 
-<!-- GIF coming soon -->
-*Demo: Tartine Bakery (Mission District) → Oracle Park, San Francisco*
+https://github.com/user-attachments/assets/275d4fcd-d3a3-4596-9a0e-30c2eaece0c0
+
+
+
+*Demo (spedup mockdata): Tartine Bakery (Mission District) → Oracle Park, San Francisco*
 
 ## Features
 
