@@ -77,7 +77,6 @@ ascii-map --lat 40.7128 --lon -74.0060 --zoom 13   # New York
 
 | Key | Action |
 | :--- | :--- |
-| **W/A/S/D** / **Arrows** | Pan map (manual mode only) |
 | **+** / **-** | Zoom in / out |
 | **Q** / **Ctrl+C** | Quit |
 

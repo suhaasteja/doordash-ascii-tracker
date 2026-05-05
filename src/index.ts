@@ -39,13 +39,14 @@ async function main() {
   let lat = parseFloat(options.lat);
   let lon = parseFloat(options.lon);
   let zoom = parseInt(options.zoom, 10);
-  let cellAspect = 0.5;
+  const cellAspect = 0.5;
 
   // DoorDash live tracking state
   let tracking: TrackingState | null = null;
   let trackingMode = false;
   let trackingError = '';
   let blink = false;
+  let manualZoom: number | null = null; // set when user overrides zoom in tracking mode
   const routeTrail: Array<{ lat: number; lon: number }> = [];
   const MAX_TRAIL = 120;
 
@@ -95,7 +96,7 @@ async function main() {
     if (trackingMode && tracking) {
       lat = (tracking.driverLat + tracking.destLat) / 2;
       lon = (tracking.driverLon + tracking.destLon) / 2;
-      zoom = fitZoom(
+      zoom = manualZoom ?? fitZoom(
         tracking.driverLat, tracking.driverLon,
         tracking.destLat,   tracking.destLon,
         width, height, cellAspect,
@@ -222,7 +223,7 @@ async function main() {
       const eta = tracking.etaMinutes !== null ? `ETA: ${tracking.etaMinutes}m` : 'ETA: --';
       const status = tracking.status.replace(/_/g, ' ').toLowerCase();
       const name = tracking.driverName;
-      const bar = ` [DD] ${name} | ${status} | ${eta} | (@) driver  [X] you | Q quit `;
+      const bar = ` [DD] ${name} | ${status} | ${eta} | (@) driver  [X] you | +/- zoom  Q quit `;
       process.stdout.write(`\x1b[38;2;255;255;0m${bar}\x1b[0m`);
     } else if (trackingMode && trackingError) {
       process.stdout.write(`\x1b[38;2;255;80;80m [DD] ${trackingError} \x1b[0m`);
@@ -274,25 +275,14 @@ async function main() {
   }
 
   process.stdin.on('keypress', (str, key) => {
+    if (!key) return; // guard against undefined key events
+
     if (key.name === 'q' || (key.ctrl && key.name === 'c')) {
       process.exit();
     }
 
-    // Manual pan/zoom only when not in tracking mode
-    if (!trackingMode) {
-      const step = 0.1 * Math.pow(2, 14 - zoom);
-      if (key.name === 'w' || key.name === 'up') lat += step;
-      if (key.name === 's' || key.name === 'down') lat -= step;
-      if (key.name === 'a' || key.name === 'left') lon -= step;
-      if (key.name === 'd' || key.name === 'right') lon += step;
-      if (str === '+' || str === '=') zoom = Math.min(zoom + 1, MAX_ZOOM);
-      if (str === '-' || str === '_') zoom = Math.max(zoom - 1, MIN_ZOOM);
-      render();
-    } else {
-      // In tracking mode, allow manual zoom override
-      if (str === '+' || str === '=') { zoom = Math.min(zoom + 1, MAX_ZOOM); render(); }
-      if (str === '-' || str === '_') { zoom = Math.max(zoom - 1, MIN_ZOOM); render(); }
-    }
+    if (str === '+' || str === '=' || key.name === '+') { manualZoom = Math.min((manualZoom ?? zoom) + 1, MAX_ZOOM); render(); }
+    if (str === '-' || str === '_' || key.name === '-') { manualZoom = Math.max((manualZoom ?? zoom) - 1, MIN_ZOOM); render(); }
   });
 
   if (!trackingMode) render();
