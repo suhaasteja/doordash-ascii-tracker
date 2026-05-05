@@ -24,11 +24,12 @@ async function main() {
   program
     .name('ascii-map')
     .description('Terminal-based ASCII map explorer')
-    .option('--lat <number>', 'starting latitude', '43.6446')
-    .option('--lon <number>', 'starting longitude', '-79.3849')
+    .option('--lat <number>', 'starting latitude', '37.7750')
+    .option('--lon <number>', 'starting longitude', '-122.4183')
     .option('--zoom <number>', 'starting zoom level (0-14)', '13')
     .option('--doordash <url>', 'DoorDash order tracking URL to follow live')
     .option('--cookies <file>', 'path to file containing raw Cookie header (for --doordash)')
+    .option('--mock', 'use local mock server at localhost:3456 instead of real DoorDash')
     .parse(process.argv);
 
   const options = program.opts();
@@ -45,6 +46,8 @@ async function main() {
   let trackingMode = false;
   let trackingError = '';
   let blink = false;
+  const routeTrail: Array<{ lat: number; lon: number }> = [];
+  const MAX_TRAIL = 120;
 
   let width = process.stdout.columns || 80;
   let height = (process.stdout.rows || 24) - 2;
@@ -63,23 +66,40 @@ async function main() {
     return [Math.round(sx), Math.round(sy)];
   }
 
+  function fitZoom(
+    lat1: number, lon1: number,
+    lat2: number, lon2: number,
+    termW: number, termH: number,
+    aspect: number,
+    padding = 0.70,
+  ): number {
+    // Compute world-pixel extents at zoom=1, then find the zoom that fits the viewport.
+    const [wx1, wy1] = latLonToWorldPixel(lat1, lon1, 1);
+    const [wx2, wy2] = latLonToWorldPixel(lat2, lon2, 1);
+    const dx = Math.abs(wx1 - wx2) / aspect;   // screen-column units
+    const dy = Math.abs(wy1 - wy2);            // screen-row units
+    if (dx < 0.001 && dy < 0.001) return zoom; // same point, keep current zoom
+
+    // z = 1 + log2(viewport / extent).  Take the tighter of W and H constraints.
+    const zoomW = 1 + Math.log2((termW * padding) / dx);
+    const zoomH = 1 + Math.log2((termH * padding) / dy);
+    return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, Math.floor(Math.min(zoomW, zoomH))));
+  }
+
   async function render() {
     width = process.stdout.columns || 80;
     height = (process.stdout.rows || 24) - 2;
     if (width < 20 || height < 10) return;
 
-    // In tracking mode, auto-center between driver and destination
+    // In tracking mode, auto-center and zoom to fit both markers
     if (trackingMode && tracking) {
       lat = (tracking.driverLat + tracking.destLat) / 2;
       lon = (tracking.driverLon + tracking.destLon) / 2;
-
-      // Auto-zoom to fit both markers with padding
-      const dlat = Math.abs(tracking.driverLat - tracking.destLat);
-      const dlon = Math.abs(tracking.driverLon - tracking.destLon);
-      const spread = Math.max(dlat, dlon * 0.5);
-      if (spread > 0) {
-        zoom = Math.max(MIN_ZOOM, Math.min(14, Math.round(14 - Math.log2(spread * 200 + 1))));
-      }
+      zoom = fitZoom(
+        tracking.driverLat, tracking.driverLon,
+        tracking.destLat,   tracking.destLon,
+        width, height, cellAspect,
+      );
     }
 
     blink = !blink;
@@ -163,17 +183,34 @@ async function main() {
 
     // Draw DoorDash markers on top of map
     if (tracking) {
+      // Route trail — fades from bright to dim as it ages
+      for (let i = 1; i < routeTrail.length; i++) {
+        const age = routeTrail.length - i;                     // 1 = newest
+        const brightness = Math.max(40, 220 - age * 14);      // 220 → 40 over ~13 points
+        const trailColor = (brightness << 8) | (Math.floor(brightness * 0.6)); // greenish fade
+        const [ax, ay] = projectToScreen(routeTrail[i - 1].lat, routeTrail[i - 1].lon, tlWorldX, tlWorldY, zoom);
+        const [bx, by] = projectToScreen(routeTrail[i].lat, routeTrail[i].lon, tlWorldX, tlWorldY, zoom);
+        fb.drawLine(ax, ay, bx, by, '·', trailColor);
+      }
+
       // Driver marker (blinking @)
       const [dx, dy] = projectToScreen(tracking.driverLat, tracking.driverLon, tlWorldX, tlWorldY, zoom);
       if (blink) fb.setChar(dx, dy, '@', COLORS.driver);
       fb.setChar(dx - 1, dy, '(', COLORS.driver);
       fb.setChar(dx + 1, dy, ')', COLORS.driver);
 
-      // Destination marker (X)
+      // Destination marker — blinking ✓ when delivered, static [X] otherwise
+      const delivered = tracking.status === 'delivered';
       const [ex, ey] = projectToScreen(tracking.destLat, tracking.destLon, tlWorldX, tlWorldY, zoom);
-      fb.setChar(ex, ey, 'X', COLORS.destination);
-      fb.setChar(ex - 1, ey, '[', COLORS.destination);
-      fb.setChar(ex + 1, ey, ']', COLORS.destination);
+      if (delivered) {
+        if (blink) fb.setChar(ex, ey, '*', COLORS.driver);
+        fb.setChar(ex - 1, ey, '[', COLORS.driver);
+        fb.setChar(ex + 1, ey, ']', COLORS.driver);
+      } else {
+        fb.setChar(ex, ey, 'X', COLORS.destination);
+        fb.setChar(ex - 1, ey, '[', COLORS.destination);
+        fb.setChar(ex + 1, ey, ']', COLORS.destination);
+      }
     }
 
     console.clear();
@@ -208,10 +245,17 @@ async function main() {
     }
 
     const tracker = new DoorDashTracker(
-      { orderUrl: options.doordash, cookies, pollIntervalMs: 4000 },
+      {
+        orderUrl: options.doordash,
+        cookies,
+        pollIntervalMs: 4000,
+        mockBaseUrl: options.mock ? "http://localhost:3456" : undefined,
+      },
       (state) => {
         tracking = state;
         trackingError = '';
+        routeTrail.push({ lat: state.driverLat, lon: state.driverLon });
+        if (routeTrail.length > MAX_TRAIL) routeTrail.shift();
         render();
       },
       (msg) => {

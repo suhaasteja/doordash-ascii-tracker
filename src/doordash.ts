@@ -12,11 +12,12 @@ export interface DoorDashConfig {
   orderUrl: string;
   cookies: string;        // raw Cookie header string
   pollIntervalMs: number;
+  mockBaseUrl?: string;   // if set, hits this instead of doordash.com
 }
 
 // Known DoorDash consumer tracking endpoints (discovered via Stage 1 recon).
 // The order UUID is extracted from the tracking URL.
-const ORDER_UUID_RE = /\/orders\/([a-f0-9-]{36})/i;
+const ORDER_UUID_RE = /\/orders\/([a-zA-Z0-9-]{6,})/;
 
 function extractOrderId(url: string): string | null {
   const m = url.match(ORDER_UUID_RE);
@@ -88,8 +89,8 @@ async function fetchTracking(orderId: string, cookies: string): Promise<Tracking
 }
 
 // REST fallback — DoorDash also exposes a simpler order status REST endpoint
-async function fetchTrackingRest(orderId: string, cookies: string): Promise<TrackingState | null> {
-  const endpoint = `https://www.doordash.com/api/v2/orders/${orderId}/`;
+async function fetchTrackingRest(orderId: string, cookies: string, baseUrl = "https://www.doordash.com"): Promise<TrackingState | null> {
+  const endpoint = `${baseUrl}/orders/${orderId}/`;
   try {
     const res = await fetch(endpoint, {
       headers: {
@@ -147,9 +148,13 @@ export class DoorDashTracker {
   }
 
   async poll() {
-    // Try GraphQL first, fall back to REST
-    let state = await fetchTracking(this.orderId, this.config.cookies);
-    if (!state) state = await fetchTrackingRest(this.orderId, this.config.cookies);
+    let state: TrackingState | null = null;
+    if (this.config.mockBaseUrl) {
+      state = await fetchTrackingRest(this.orderId, "", this.config.mockBaseUrl);
+    } else {
+      state = await fetchTracking(this.orderId, this.config.cookies);
+      if (!state) state = await fetchTrackingRest(this.orderId, this.config.cookies);
+    }
 
     if (state) {
       this.onUpdate(state);
